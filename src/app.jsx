@@ -177,7 +177,7 @@ function Section({ meta, tasks, allTags, onAdd, onComplete, onDelete, onMove, on
         </div>
         <button onClick={add} style={S.btn(meta.color, true)}>+ Add</button>
       </div>
-      <div style={{ display:"flex", flexDirection:"column", gap:8, overflowY:"auto", maxHeight:360 }}>
+      <div style={{ display:"flex", flexDirection:"column", gap:8, overflowY:"auto", maxHeight:"none" }}>
         {filtered.length===0
           ? <p style={{ fontSize:14, color:"#444", textAlign:"center", padding:"1rem 0", margin:0 }}>{filterTag?"No tasks with this tag.":"No tasks here yet!"}</p>
           : filtered.map(t => {
