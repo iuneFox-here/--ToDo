@@ -234,13 +234,17 @@ function DayPanel({ selected, items }) {
 }
 
 // ── Task list pieces ──
-function TaskItem({ task, onComplete, onDelete, onMoveUp, onMoveDown, onSetDate, isFirst, isLast }) {
-  const [editingDate, setEditingDate] = useState(false);
+function TaskItem({ task, section, onComplete, onDelete, onMove, onMoveUp, onMoveDown, onSetDate, isFirst, isLast }) {
+  const [panel, setPanel] = useState(null); // null | "date" | "move"
   const [draft, setDraft] = useState(task.reminder || "");
 
-  const openEdit = () => { setDraft(task.reminder || ""); setEditingDate(e => !e); };
-  const save = () => { onSetDate(task.id, draft); setEditingDate(false); };
-  const clear = () => { onSetDate(task.id, ""); setEditingDate(false); };
+  const toggleDate = () => {
+    setDraft(task.reminder || "");
+    setPanel(p => (p === "date" ? null : "date"));
+  };
+  const toggleMove = () => setPanel(p => (p === "move" ? null : "move"));
+  const save = () => { onSetDate(task.id, draft); setPanel(null); };
+  const clear = () => { onSetDate(task.id, ""); setPanel(null); };
 
   return (
     <div style={{ background:"#1A1A1A", borderRadius:10, border:"1px solid #2A2A2A", padding:"10px 12px", display:"flex", flexDirection:"column", gap:10 }}>
@@ -254,32 +258,43 @@ function TaskItem({ task, onComplete, onDelete, onMoveUp, onMoveDown, onSetDate,
         </div>
       </div>
 
-      {/* Row 2: reorder + date + delete */}
+      {/* Row 2: reorder + date + move + delete */}
       <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
         <button onClick={onMoveUp} disabled={isFirst}
           style={{ ...S.smBtn(isFirst ? "#2A2A2A" : "#3A3A3A"), color:isFirst?"#333":"#AAA", cursor:isFirst?"default":"pointer" }}>▲</button>
         <button onClick={onMoveDown} disabled={isLast}
           style={{ ...S.smBtn(isLast ? "#2A2A2A" : "#3A3A3A"), color:isLast?"#333":"#AAA", cursor:isLast?"default":"pointer" }}>▼</button>
-        <button onClick={openEdit} style={S.smBtn(editingDate ? "#FFD6A5" : "#3A3A3A")}>📅 Date</button>
-        <button style={{ ...S.smBtn("#A32D2D"), marginLeft:"auto" }} onClick={() => onDelete(task.id)}>🗑 Delete</button>
+        <button onClick={toggleDate} style={S.smBtn(panel === "date" ? "#FFD6A5" : "#3A3A3A")}>📅 Date</button>
+        <button onClick={toggleMove} style={S.smBtn(panel === "move" ? "#A0C4FF" : "#3A3A3A")}>↔ Move</button>
+        <button style={{ ...S.smBtn("#A32D2D"), marginLeft:"auto" }} onClick={() => onDelete(task.id)}>Delete</button>
       </div>
 
       {/* Inline date editor */}
-      {editingDate && (
+      {panel === "date" && (
         <div style={{ display:"flex", flexDirection:"column", gap:8, paddingTop:8, borderTop:"1px solid #252525" }}>
           <DateTimeField value={draft} onChange={setDraft} />
           <div style={{ display:"flex", gap:6 }}>
             <button onClick={save} style={S.smBtn("#7CBA5A")}>Save</button>
             <button onClick={clear} style={S.smBtn("#A32D2D")}>Clear date</button>
-            <button onClick={() => setEditingDate(false)} style={S.smBtn()}>Cancel</button>
+            <button onClick={() => setPanel(null)} style={S.smBtn()}>Cancel</button>
           </div>
+        </div>
+      )}
+
+      {/* Inline move picker */}
+      {panel === "move" && (
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", paddingTop:8, borderTop:"1px solid #252525" }}>
+          <span style={{ fontSize:13, color:"#888" }}>Move to:</span>
+          {SECTIONS.filter(s => s.key !== section).map(s => (
+            <button key={s.key} onClick={() => onMove(task.id, s.key)} style={S.smBtn(s.color)}>{s.short}</button>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder, onSetDate }) {
+function Section({ meta, tasks, onAdd, onComplete, onDelete, onMove, onReorder, onSetDate }) {
   const [text, setText] = useState("");
   const [reminder, setReminder] = useState("");
 
@@ -304,8 +319,8 @@ function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder, onSetDat
         {tasks.length === 0
           ? <p style={{ fontSize:14, color:"#444", textAlign:"center", padding:"1rem 0", margin:0 }}>No tasks here yet!</p>
           : tasks.map((t, i) => (
-              <TaskItem key={t.id} task={t}
-                onComplete={onComplete} onDelete={onDelete} onSetDate={onSetDate}
+              <TaskItem key={t.id} task={t} section={meta.key}
+                onComplete={onComplete} onDelete={onDelete} onMove={onMove} onSetDate={onSetDate}
                 onMoveUp={() => onReorder(meta.key, i, -1)}
                 onMoveDown={() => onReorder(meta.key, i, 1)}
                 isFirst={i===0} isLast={i===tasks.length-1} />
@@ -318,28 +333,35 @@ function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder, onSetDat
 
 function CompletedSection({ tasks, onRestore, onClearAll }) {
   const [open, setOpen] = useState(false);
+  const clearAll = () => {
+    if (window.confirm("Clear all completed tasks?")) onClearAll();
+  };
   return (
     <div style={{ ...S.card(), marginTop:"1rem" }}>
-      <button onClick={() => setOpen(o=>!o)} style={{ background:"none", border:"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"space-between", color:"#E0E0E0", padding:0 }}>
-        <span style={{ fontSize:17, fontWeight:600 }}>✅ Completed <span style={{ fontSize:14, fontWeight:400, color:"#555" }}>({tasks.length})</span></span>
-        <span style={{ fontSize:13, color:"#555" }}>{open?"▲ hide":"▼ show"}</span>
-      </button>
+      {/* Header: title on the left, Clear All + hide/show on the right */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+        <button onClick={() => setOpen(o=>!o)} style={{ background:"none", border:"none", cursor:"pointer", color:"#E0E0E0", padding:0, textAlign:"left", flex:1 }}>
+          <span style={{ fontSize:17, fontWeight:600 }}>✅ Completed <span style={{ fontSize:14, fontWeight:400, color:"#555" }}>({tasks.length})</span></span>
+        </button>
+        <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          {tasks.length > 0 && <button onClick={clearAll} style={S.smBtn("#A32D2D")}>Clear All</button>}
+          <button onClick={() => setOpen(o=>!o)} style={S.smBtn()}>{open ? "▲ hide" : "▼ show"}</button>
+        </div>
+      </div>
+
       {open && (
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
           {tasks.length === 0
             ? <p style={{ fontSize:14, color:"#444", textAlign:"center", padding:"0.5rem 0", margin:0 }}>Nothing completed yet!</p>
-            : <>
-                {tasks.map(t => (
-                  <div key={t.id} style={{ display:"flex", flexDirection:"column", gap:8, padding:"10px 12px", background:"#161616", borderRadius:10, border:"1px solid #2A2A2A" }}>
-                    <p style={{ margin:0, fontSize:15, color:"#555", textDecoration:"line-through", overflowWrap:"anywhere" }}>{t.text}</p>
-                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
-                      {t.completedFrom && <span style={{ fontSize:12, color:"#444" }}>from {t.completedFrom}</span>}
-                      <button onClick={() => onRestore(t.id)} style={{ ...S.smBtn("#A0C4FF"), marginLeft:"auto" }}>Restore</button>
-                    </div>
+            : tasks.map(t => (
+                <div key={t.id} style={{ display:"flex", flexDirection:"column", gap:8, padding:"10px 12px", background:"#161616", borderRadius:10, border:"1px solid #2A2A2A" }}>
+                  <p style={{ margin:0, fontSize:15, color:"#555", textDecoration:"line-through", overflowWrap:"anywhere" }}>{t.text}</p>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+                    {t.completedFrom && <span style={{ fontSize:12, color:"#444" }}>from {t.completedFrom}</span>}
+                    <button onClick={() => onRestore(t.id)} style={{ ...S.smBtn("#A0C4FF"), marginLeft:"auto" }}>Restore</button>
                   </div>
-                ))}
-                <button onClick={onClearAll} style={S.btn("#A32D2D", true)}>🗑 Clear All Completed</button>
-              </>
+                </div>
+              ))
           }
         </div>
       )}
@@ -418,6 +440,20 @@ export default function App() {
     setAllTasks(prev => ({ ...prev, [section]: prev[section].filter(t => t.id !== id) }));
     sync("saving");
     try { await fbDeleteTask(id); sync("saved"); } catch { sync("error"); }
+  };
+
+  // Move a task to another list. Its date/time stays, so it keeps showing on the calendar.
+  const moveTask = async (taskId, from, to) => {
+    const task = allTasks[from].find(t => t.id === taskId);
+    if (!task) return;
+    const moved = { ...task, section:to, order:allTasks[to].length };
+    setAllTasks(prev => ({
+      ...prev,
+      [from]: prev[from].filter(t => t.id !== taskId),
+      [to]: [...prev[to], moved],
+    }));
+    sync("saving");
+    try { await fbSaveTask(moved); sync("saved"); } catch { sync("error"); }
   };
 
   const setTaskDate = async (section, id, value) => {
@@ -504,6 +540,7 @@ export default function App() {
             onAdd={addTask}
             onComplete={(id) => completeTask(s.key, id)}
             onDelete={(id) => deleteTask(s.key, id)}
+            onMove={(id, to) => moveTask(id, s.key, to)}
             onSetDate={(id, value) => setTaskDate(s.key, id, value)}
             onReorder={reorderTask} />
         ))}
