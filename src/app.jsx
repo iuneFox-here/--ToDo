@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { db } from "./firebase";
 import {
   collection, doc, setDoc, deleteDoc, getDocs, writeBatch
@@ -7,10 +7,38 @@ import {
 const genId = () => Math.random().toString(36).slice(2, 9);
 
 const SECTIONS = [
-  { key: "today", label: "🔥 Must Do Today", jp: "今日やる", color: "#FF6B6B", bg: "#2A1A1A" },
-  { key: "normal", label: "📋 Normal", jp: "普通", color: "#A0C4FF", bg: "#1A2233" },
-  { key: "later", label: "🕐 Do Later", jp: "後で", color: "#B5EAD7", bg: "#1A2E24" },
+  { key: "today", label: "🔥 Must Do Today", short: "🔥 Today", jp: "今日やる", color: "#FF6B6B", bg: "#2A1A1A" },
+  { key: "normal", label: "📋 Normal", short: "📋 Normal", jp: "普通", color: "#A0C4FF", bg: "#1A2233" },
+  { key: "later", label: "🕐 Do Later", short: "🕐 Later", jp: "後で", color: "#B5EAD7", bg: "#1A2E24" },
 ];
+const SECTION_BY_KEY = Object.fromEntries(SECTIONS.map(s => [s.key, s]));
+
+// ── Date helpers ──
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"]; // Sunday first
+const pad = (n) => String(n).padStart(2, "0");
+const dateKey = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+const todayKey = () => {
+  const n = new Date();
+  return dateKey(n.getFullYear(), n.getMonth(), n.getDate());
+};
+const parseKey = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return { y, m: m - 1, d };
+};
+const weekdayOf = (key) => {
+  const { y, m, d } = parseKey(key);
+  return new Date(y, m, d).getDay();
+};
+const validDate = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v);
+const timeOf = (v) => (validDate(v) && v.length >= 16 ? v.slice(11, 16) : "");
+const fmtWhen = (v) => {
+  if (!v) return "";
+  if (!validDate(v)) return v;
+  const date = v.slice(0, 10);
+  const { m, d } = parseKey(date);
+  const t = timeOf(v);
+  return `${m + 1}/${d}(${WEEKDAYS[weekdayOf(date)]})${t ? " " + t : ""}`;
+};
 
 // ── Styles ──
 const S = {
@@ -19,7 +47,8 @@ const S = {
   input: { fontSize:16, padding:"11px 14px", background:"#222", border:"1px solid #3A3A3A", borderRadius:10, color:"#F0F0F0", outline:"none", boxSizing:"border-box", width:"100%" },
   btn: (color, full) => ({ padding:"11px 18px", fontSize:15, fontWeight:500, cursor:"pointer", border:`1px solid ${color||"#555"}`, borderRadius:10, background:"transparent", color:color||"#CCC", whiteSpace:"nowrap", width:full?"100%":undefined }),
   smBtn: (color) => ({ fontSize:13, padding:"5px 10px", cursor:"pointer", border:`1px solid ${color||"#3A3A3A"}`, borderRadius:8, background:"transparent", color:color||"#AAA", whiteSpace:"nowrap" }),
-  dtInput: { fontSize:15, padding:"11px 12px", background:"#222", border:"1px solid #3A3A3A", borderRadius:10, color:"#CCC", outline:"none", width:"100%", boxSizing:"border-box" },
+  dtInput: { fontSize:15, padding:"11px 12px", background:"#222", border:"1px solid #3A3A3A", borderRadius:10, color:"#CCC", outline:"none", width:"100%", boxSizing:"border-box", colorScheme:"dark" },
+  select: { fontSize:15, padding:"10px 8px", background:"#222", border:"1px solid #3A3A3A", borderRadius:10, color:"#CCC", outline:"none", flex:1, minWidth:0, colorScheme:"dark" },
 };
 
 // ── Firebase helpers ──
@@ -41,7 +70,7 @@ async function fbSaveTasksBatch(tasks) {
   await batch.commit();
 }
 
-// ── Components ──
+// ── Small components ──
 function SyncBadge({ status }) {
   const cfg = {
     idle: { color:"#555", text:"" },
@@ -53,7 +82,166 @@ function SyncBadge({ status }) {
   return <span style={{ fontSize:13, color:cfg.color, marginLeft:8 }}>{cfg.text}</span>;
 }
 
-function TaskItem({ task, onComplete, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) {
+// Date + 24-hour time picker. Value: "" | "YYYY-MM-DD" | "YYYY-MM-DDTHH:mm"
+const HOURS = Array.from({ length: 24 }, (_, i) => pad(i));
+const MINUTES = Array.from({ length: 12 }, (_, i) => pad(i * 5));
+
+function DateTimeField({ value, onChange }) {
+  const date = validDate(value) ? value.slice(0, 10) : "";
+  const t = timeOf(value);
+  const hh = t ? t.slice(0, 2) : "";
+  const mm = t ? t.slice(3, 5) : "";
+  const minuteOptions = mm && !MINUTES.includes(mm) ? [...MINUTES, mm].sort() : MINUTES;
+
+  const build = (d, h, m) => {
+    if (!d) return "";
+    if (!h) return d;
+    return `${d}T${h}:${m || "00"}`;
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+      <input type="date" value={date} onChange={e => onChange(build(e.target.value, hh, mm))} style={S.dtInput} />
+      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+        <select value={hh} disabled={!date} onChange={e => onChange(build(date, e.target.value, mm))} style={S.select}>
+          <option value="">-- (no time)</option>
+          {HOURS.map(h => <option key={h} value={h}>{h}</option>)}
+        </select>
+        <span style={{ color:"#888" }}>:</span>
+        <select value={mm} disabled={!date || !hh} onChange={e => onChange(build(date, hh, e.target.value))} style={S.select}>
+          {!hh && <option value="">--</option>}
+          {minuteOptions.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+// ── Calendar ──
+function Calendar({ tasksByDate, viewYM, setViewYM, selected, setSelected }) {
+  const { y, m } = viewYM;
+  const firstWeekday = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const cells = [
+    ...Array(firstWeekday).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+  const today = todayKey();
+
+  const go = (delta) => {
+    const d = new Date(y, m + delta, 1);
+    setViewYM({ y: d.getFullYear(), m: d.getMonth() });
+  };
+  const goToday = () => {
+    const n = new Date();
+    setViewYM({ y: n.getFullYear(), m: n.getMonth() });
+    setSelected(today);
+  };
+
+  return (
+    <div style={S.card()}>
+      {/* Header */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, flexWrap:"wrap" }}>
+        <span style={{ fontSize:19, fontWeight:600, color:"#F0F0F0" }}>📅 {y}年{m + 1}月</span>
+        <div style={{ display:"flex", gap:6 }}>
+          <button onClick={goToday} style={S.smBtn("#FFD6A5")}>Today</button>
+          <button onClick={() => go(-1)} style={{ ...S.smBtn(), padding:"5px 14px" }} aria-label="Previous month">◀</button>
+          <button onClick={() => go(1)} style={{ ...S.smBtn(), padding:"5px 14px" }} aria-label="Next month">▶</button>
+        </div>
+      </div>
+
+      {/* Weekday row */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, minmax(0, 1fr))", gap:4 }}>
+        {WEEKDAYS.map((w, i) => (
+          <div key={w} style={{ textAlign:"center", fontSize:12, color: i===0 ? "#FF8A8A" : i===6 ? "#8AB4FF" : "#777" }}>{w}</div>
+        ))}
+      </div>
+
+      {/* Day cells */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, minmax(0, 1fr))", gap:4 }}>
+        {cells.map((d, idx) => {
+          if (d === null) return <div key={`e${idx}`} />;
+          const key = dateKey(y, m, d);
+          const items = tasksByDate[key] || [];
+          const isToday = key === today;
+          const isSel = key === selected;
+          const numColor = idx % 7 === 0 ? "#FF8A8A" : idx % 7 === 6 ? "#8AB4FF" : "#E0E0E0";
+          return (
+            <button key={key} onClick={() => setSelected(key)}
+              style={{
+                minHeight:48, minWidth:0, padding:"4px 2px", cursor:"pointer",
+                display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:4,
+                background: isSel ? "#2C3A55" : "#1E1E1E",
+                border: isToday ? "1.5px solid #FFD6A5" : isSel ? "1px solid #4A6A9A" : "1px solid #262626",
+                borderRadius:10, color:numColor, fontSize:15, fontWeight: isToday ? 700 : 400,
+              }}>
+              <span>{d}</span>
+              <span style={{ display:"flex", gap:2, height:6, alignItems:"center" }}>
+                {items.slice(0, 3).map((it, i) => (
+                  <span key={i} style={{ width:5, height:5, borderRadius:"50%", background: SECTION_BY_KEY[it.section]?.color || "#888" }} />
+                ))}
+                {items.length > 3 && <span style={{ fontSize:9, color:"#888", lineHeight:1 }}>+</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div style={{ display:"flex", gap:12, flexWrap:"wrap", fontSize:12, color:"#666" }}>
+        {SECTIONS.map(s => (
+          <span key={s.key}><span style={{ color:s.color }}>●</span> {s.short}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DayPanel({ selected, items }) {
+  const { m, d } = parseKey(selected);
+  const sorted = [...items].sort((a, b) => timeOf(a.task.reminder).localeCompare(timeOf(b.task.reminder)));
+  return (
+    <div style={S.card("#1A1F2B")}>
+      <div>
+        <span style={{ fontSize:17, fontWeight:600, color:"#F0F0F0" }}>
+          {m + 1}月{d}日({WEEKDAYS[weekdayOf(selected)]})
+        </span>
+        <span style={{ fontSize:13, color:"#666", marginLeft:8 }}>{items.length} item{items.length === 1 ? "" : "s"}</span>
+      </div>
+      {sorted.length === 0
+        ? <p style={{ margin:0, fontSize:14, color:"#555" }}>Nothing scheduled on this day.</p>
+        : (
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {sorted.map(({ task, section }) => {
+              const t = timeOf(task.reminder);
+              const sec = SECTION_BY_KEY[section];
+              return (
+                <div key={task.id} style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"8px 10px", background:"#161A24", borderRadius:10, border:"1px solid #252B3A" }}>
+                  <span style={{ width:52, flexShrink:0, fontSize:t ? 15 : 12, color:t ? "#FFD6A5" : "#666", fontVariantNumeric:"tabular-nums", paddingTop:t ? 0 : 2 }}>
+                    {t || "All day"}
+                  </span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <p style={{ margin:0, fontSize:15, lineHeight:1.5, color:"#E0E0E0", overflowWrap:"anywhere" }}>{task.text}</p>
+                    <span style={{ fontSize:12, color:sec?.color }}>{sec?.short}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+// ── Task list pieces ──
+function TaskItem({ task, onComplete, onDelete, onMoveUp, onMoveDown, onSetDate, isFirst, isLast }) {
+  const [editingDate, setEditingDate] = useState(false);
+  const [draft, setDraft] = useState(task.reminder || "");
+
+  const openEdit = () => { setDraft(task.reminder || ""); setEditingDate(e => !e); };
+  const save = () => { onSetDate(task.id, draft); setEditingDate(false); };
+  const clear = () => { onSetDate(task.id, ""); setEditingDate(false); };
+
   return (
     <div style={{ background:"#1A1A1A", borderRadius:10, border:"1px solid #2A2A2A", padding:"10px 12px", display:"flex", flexDirection:"column", gap:10 }}>
       {/* Row 1: checkbox + full-width text */}
@@ -62,23 +250,36 @@ function TaskItem({ task, onComplete, onDelete, onMoveUp, onMoveDown, isFirst, i
           style={{ marginTop:3, cursor:"pointer", accentColor:"#7CBA5A", width:20, height:20, flexShrink:0 }} />
         <div style={{ flex:1, minWidth:0 }}>
           <p style={{ margin:0, fontSize:16, lineHeight:1.5, color:"#E0E0E0", overflowWrap:"anywhere" }}>{task.text}</p>
-          {task.reminder && <p style={{ margin:"4px 0 0", fontSize:13, color:"#777" }}>⏰ {task.reminder}</p>}
+          {task.reminder && <p style={{ margin:"4px 0 0", fontSize:13, color:"#FFD6A5" }}>📅 {fmtWhen(task.reminder)}</p>}
         </div>
       </div>
 
-      {/* Row 2: reorder + delete */}
+      {/* Row 2: reorder + date + delete */}
       <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
         <button onClick={onMoveUp} disabled={isFirst}
           style={{ ...S.smBtn(isFirst ? "#2A2A2A" : "#3A3A3A"), color:isFirst?"#333":"#AAA", cursor:isFirst?"default":"pointer" }}>▲</button>
         <button onClick={onMoveDown} disabled={isLast}
           style={{ ...S.smBtn(isLast ? "#2A2A2A" : "#3A3A3A"), color:isLast?"#333":"#AAA", cursor:isLast?"default":"pointer" }}>▼</button>
+        <button onClick={openEdit} style={S.smBtn(editingDate ? "#FFD6A5" : "#3A3A3A")}>📅 Date</button>
         <button style={{ ...S.smBtn("#A32D2D"), marginLeft:"auto" }} onClick={() => onDelete(task.id)}>🗑 Delete</button>
       </div>
+
+      {/* Inline date editor */}
+      {editingDate && (
+        <div style={{ display:"flex", flexDirection:"column", gap:8, paddingTop:8, borderTop:"1px solid #252525" }}>
+          <DateTimeField value={draft} onChange={setDraft} />
+          <div style={{ display:"flex", gap:6 }}>
+            <button onClick={save} style={S.smBtn("#7CBA5A")}>Save</button>
+            <button onClick={clear} style={S.smBtn("#A32D2D")}>Clear date</button>
+            <button onClick={() => setEditingDate(false)} style={S.smBtn()}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder }) {
+function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder, onSetDate }) {
   const [text, setText] = useState("");
   const [reminder, setReminder] = useState("");
 
@@ -96,7 +297,7 @@ function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder }) {
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
         <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Add a task..." style={S.input} />
-        <input type="datetime-local" value={reminder} onChange={e=>setReminder(e.target.value)} style={S.dtInput} />
+        <DateTimeField value={reminder} onChange={setReminder} />
         <button onClick={add} style={S.btn(meta.color, true)}>+ Add</button>
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
@@ -104,7 +305,7 @@ function Section({ meta, tasks, onAdd, onComplete, onDelete, onReorder }) {
           ? <p style={{ fontSize:14, color:"#444", textAlign:"center", padding:"1rem 0", margin:0 }}>No tasks here yet!</p>
           : tasks.map((t, i) => (
               <TaskItem key={t.id} task={t}
-                onComplete={onComplete} onDelete={onDelete}
+                onComplete={onComplete} onDelete={onDelete} onSetDate={onSetDate}
                 onMoveUp={() => onReorder(meta.key, i, -1)}
                 onMoveDown={() => onReorder(meta.key, i, 1)}
                 isFirst={i===0} isLast={i===tasks.length-1} />
@@ -153,6 +354,12 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
+  const [viewYM, setViewYM] = useState(() => {
+    const n = new Date();
+    return { y: n.getFullYear(), m: n.getMonth() };
+  });
+  const [selected, setSelected] = useState(todayKey());
+
   useEffect(() => {
     (async () => {
       try {
@@ -169,6 +376,19 @@ export default function App() {
       setLoading(false);
     })();
   }, []);
+
+  // Map of "YYYY-MM-DD" -> [{ task, section }] for active tasks that have a date
+  const tasksByDate = useMemo(() => {
+    const map = {};
+    ["today", "normal", "later"].forEach(sec => {
+      allTasks[sec].forEach(t => {
+        if (!validDate(t.reminder)) return;
+        const k = t.reminder.slice(0, 10);
+        (map[k] = map[k] || []).push({ task: t, section: sec });
+      });
+    });
+    return map;
+  }, [allTasks]);
 
   const sync = (status) => {
     setSyncStatus(status);
@@ -198,6 +418,18 @@ export default function App() {
     setAllTasks(prev => ({ ...prev, [section]: prev[section].filter(t => t.id !== id) }));
     sync("saving");
     try { await fbDeleteTask(id); sync("saved"); } catch { sync("error"); }
+  };
+
+  const setTaskDate = async (section, id, value) => {
+    const task = allTasks[section].find(t => t.id === id);
+    if (!task) return;
+    const updated = { ...task, reminder:value };
+    setAllTasks(prev => ({
+      ...prev,
+      [section]: prev[section].map(t => (t.id === id ? updated : t)),
+    }));
+    sync("saving");
+    try { await fbSaveTask(updated); sync("saved"); } catch { sync("error"); }
   };
 
   const reorderTask = async (section, idx, dir) => {
@@ -251,7 +483,7 @@ export default function App() {
 
   return (
     <div style={S.app}>
-      <div style={{ marginBottom:"1.25rem" }}>
+      <div style={{ marginBottom:"1rem" }}>
         <p style={{ margin:0, fontSize:24, fontWeight:600, color:"#F0F0F0" }}>
           タスク管理 <span style={{ fontSize:16, fontWeight:400, color:"#555" }}>/ Task Manager</span>
           <SyncBadge status={syncStatus} />
@@ -259,12 +491,20 @@ export default function App() {
         <p style={{ margin:"4px 0 0", fontSize:15, color:"#666" }}>{total} active · {allTasks.completed.length} completed</p>
       </div>
 
+      {/* Calendar + selected day */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(320px, 100%), 1fr))", gap:"1rem", marginBottom:"1rem" }}>
+        <Calendar tasksByDate={tasksByDate} viewYM={viewYM} setViewYM={setViewYM} selected={selected} setSelected={setSelected} />
+        <DayPanel selected={selected} items={tasksByDate[selected] || []} />
+      </div>
+
+      {/* Lists */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(min(300px, 100%), 1fr))", gap:"1rem" }}>
         {SECTIONS.map(s => (
           <Section key={s.key} meta={s} tasks={allTasks[s.key]}
             onAdd={addTask}
             onComplete={(id) => completeTask(s.key, id)}
             onDelete={(id) => deleteTask(s.key, id)}
+            onSetDate={(id, value) => setTaskDate(s.key, id, value)}
             onReorder={reorderTask} />
         ))}
       </div>
